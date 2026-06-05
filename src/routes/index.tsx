@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -10,6 +10,14 @@ import {
   type TeamSeason,
   type FootballPosition,
 } from "@/lib/eredivisie-data";
+import {
+  calculateTeamStrength,
+  simulateSeason,
+  getVerdict,
+  USER_TEAM_NAME,
+  type TeamRecord,
+  type PlacedPlayerInfo,
+} from "@/lib/season-simulation";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -79,6 +87,10 @@ function Game() {
   const [current, setCurrent] = useState<TeamSeason | null>(null);
   const [rolling, setRolling] = useState(false);
   const [pickFor, setPickFor] = useState<Player | null>(null);
+  const [highlightedPlayerId, setHighlightedPlayerId] = useState<string | null>(null);
+  const [seasonResult, setSeasonResult] = useState<TeamRecord[] | null>(null);
+
+  const positionPickerRef = useRef<HTMLDivElement>(null);
 
   const placedCount = Object.keys(occupiedSlots).length;
   const isFull = placedCount === 11;
@@ -112,11 +124,22 @@ function Game() {
         (p.positions ?? []).some((pos) => findFreeSlotFor(pos) !== null),
     );
 
+  // Auto-scroll to position picker when a player is selected for picking
+  useEffect(() => {
+    if (pickFor && positionPickerRef.current) {
+      positionPickerRef.current.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    }
+  }, [pickFor]);
+
   const roll = () => {
     if (isFull) return;
     setRolling(true);
     setCurrent(null);
     setPickFor(null);
+    setHighlightedPlayerId(null);
     let ticks = 0;
     const interval = setInterval(() => {
       setCurrent(teamSeasons[Math.floor(Math.random() * teamSeasons.length)]);
@@ -133,6 +156,12 @@ function Game() {
     const opts = availablePositionsFor(player);
     if (!opts.some((o) => o.slot)) return; // no available positions
     setPickFor(player);
+    setHighlightedPlayerId(player.id);
+  };
+
+  const cancelPicker = () => {
+    setPickFor(null);
+    setHighlightedPlayerId(null);
   };
 
   const confirmPick = (player: Player, pos: FootballPosition) => {
@@ -154,6 +183,7 @@ function Game() {
       return n;
     });
     setPickFor(null);
+    setHighlightedPlayerId(null);
     setCurrent(null);
   };
 
@@ -162,6 +192,34 @@ function Game() {
     setSelectedPlayerIds(new Set());
     setCurrent(null);
     setPickFor(null);
+    setHighlightedPlayerId(null);
+    setSeasonResult(null);
+  };
+
+  const handleSimulate = () => {
+    const placed = Object.values(occupiedSlots) as PlacedPlayer[];
+    const info: PlacedPlayerInfo[] = placed.map((p) => ({
+      player: p.player,
+      club: p.club,
+      season: p.season,
+      positionPlayed: p.positionPlayed,
+    }));
+    const { teamStrength } = calculateTeamStrength(info);
+    const result = simulateSeason(teamStrength);
+    setSeasonResult(result);
+  };
+
+  const handleSimulateAgain = () => {
+    const placed = Object.values(occupiedSlots) as PlacedPlayer[];
+    const info: PlacedPlayerInfo[] = placed.map((p) => ({
+      player: p.player,
+      club: p.club,
+      season: p.season,
+      positionPlayed: p.positionPlayed,
+    }));
+    const { teamStrength } = calculateTeamStrength(info);
+    const result = simulateSeason(teamStrength);
+    setSeasonResult(result);
   };
 
   const placed = Object.values(occupiedSlots) as PlacedPlayer[];
@@ -171,6 +229,9 @@ function Game() {
       : 0;
 
   const currentHasPlayable = current ? teamHasAnyPlayable(current) : false;
+
+  // Position options for the currently picked player
+  const pickForOptions = pickFor ? availablePositionsFor(pickFor) : [];
 
   return (
     <div className="min-h-screen">
@@ -213,7 +274,7 @@ function Game() {
                 highlighted slot on the pitch.
               </span>
               <button
-                onClick={() => setPickFor(null)}
+                onClick={cancelPicker}
                 className="text-xs text-muted-foreground hover:text-destructive transition-colors"
               >
                 Cancel
@@ -227,11 +288,20 @@ function Game() {
               if (pickFor) confirmPick(pickFor, slot.accepts);
             }}
           />
-          {isFull && <FinalCard avg={avg} placed={placed} onReset={reset} />}
+          {isFull && !seasonResult && (
+            <FinalCard avg={avg} placed={placed} onReset={reset} onSimulate={handleSimulate} />
+          )}
+          {isFull && seasonResult && (
+            <SeasonResultCard
+              placed={placed}
+              seasonResult={seasonResult}
+              onSimulateAgain={handleSimulateAgain}
+              onReset={reset}
+            />
+          )}
         </section>
 
-
-        <aside className="space-y-4">
+        <aside className="space-y-4" ref={positionPickerRef}>
           {!isFull && (
             <Card className="p-5">
               <div className="flex items-center justify-between mb-3">
@@ -241,7 +311,7 @@ function Game() {
                 <SlotProgress occupied={occupiedSlots} />
               </div>
 
-              {!current && (
+              {!current && !pickFor && (
                 <div className="text-center py-8">
                   <div className="text-6xl mb-4">🎲</div>
                   <p className="text-sm text-muted-foreground mb-5">
@@ -253,7 +323,16 @@ function Game() {
                 </div>
               )}
 
-              {current && (
+              {pickFor && !rolling && (
+                <PositionPicker
+                  player={pickFor}
+                  options={pickForOptions}
+                  onConfirm={confirmPick}
+                  onCancel={cancelPicker}
+                />
+              )}
+
+              {current && !pickFor && (
                 <div>
                   <div
                     className={`rounded-lg border p-4 mb-4 text-center ${
@@ -297,12 +376,17 @@ function Game() {
                               const opts = availablePositionsFor(p);
                               const anyAvailable = opts.some((o) => o.slot);
                               const disabled = taken || !anyAvailable;
+                              const isHighlighted = highlightedPlayerId === p.id;
                               return (
                                 <button
                                   key={p.id}
                                   onClick={() => openPicker(p)}
                                   disabled={disabled}
-                                  className="w-full flex items-center justify-between gap-3 rounded-md border border-border bg-secondary/40 px-3 py-2 text-left hover:bg-primary/15 hover:border-primary/50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-secondary/40 disabled:hover:border-border"
+                                  className={`w-full flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-left transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-secondary/40 disabled:hover:border-border ${
+                                    isHighlighted
+                                      ? "border-primary bg-primary/20 shadow-[0_0_12px_var(--primary)]"
+                                      : "border-border bg-secondary/40 hover:bg-primary/15 hover:border-primary/50"
+                                  }`}
                                 >
                                   <div className="flex items-center gap-2 min-w-0">
                                     <div className="flex gap-0.5">
@@ -310,7 +394,7 @@ function Game() {
                                         <PositionPill key={i} pos={pos} />
                                       ))}
                                     </div>
-                                    <span className="font-medium truncate ml-1">
+                                    <span className={`font-medium truncate ml-1 ${isHighlighted ? "text-primary" : ""}`}>
                                       {p.name}
                                     </span>
                                   </div>
@@ -374,7 +458,54 @@ function Game() {
   );
 }
 
-
+function PositionPicker({
+  player,
+  options,
+  onConfirm,
+  onCancel,
+}: {
+  player: Player;
+  options: { pos: FootballPosition; slot: SlotKey | null }[];
+  onConfirm: (player: Player, pos: FootballPosition) => void;
+  onCancel: () => void;
+}) {
+  const availableOptions = options.filter((o) => o.slot !== null);
+  return (
+    <div className="rounded-lg border border-primary/50 bg-primary/5 p-4">
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-sm font-bold">
+          Place <span className="text-primary">{player.name}</span>
+        </span>
+        <button
+          onClick={onCancel}
+          className="text-xs text-muted-foreground hover:text-destructive transition-colors"
+        >
+          Cancel
+        </button>
+      </div>
+      <p className="text-xs text-muted-foreground mb-3">
+        Choose a position for this player:
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {availableOptions.map((opt) => (
+          <button
+            key={opt.pos}
+            onClick={() => onConfirm(player, opt.pos)}
+            className="flex items-center gap-2 rounded-md border border-primary/40 bg-primary/10 px-3 py-2 text-sm font-bold hover:bg-primary/25 hover:border-primary transition-colors"
+          >
+            <PositionPill pos={opt.pos} />
+            <span className="text-muted-foreground text-xs">
+              {opt.slot}
+            </span>
+          </button>
+        ))}
+      </div>
+      {availableOptions.length === 0 && (
+        <p className="text-xs text-muted-foreground">No available positions.</p>
+      )}
+    </div>
+  );
+}
 
 function SlotProgress({
   occupied,
@@ -550,10 +681,12 @@ function FinalCard({
   avg,
   placed,
   onReset,
+  onSimulate,
 }: {
   avg: number;
   placed: PlacedPlayer[];
   onReset: () => void;
+  onSimulate: () => void;
 }) {
   const tier =
     avg >= 83
@@ -579,10 +712,157 @@ function FinalCard({
         <div className="text-xs text-muted-foreground mt-2">
           Players drawn from {clubs} different club-season{clubs > 1 ? "s" : ""}.
         </div>
-        <Button onClick={onReset} size="lg" className="mt-5 font-bold">
-          Play Again
-        </Button>
+        <div className="mt-5 flex flex-col gap-2">
+          <Button onClick={onSimulate} size="lg" className="w-full font-bold">
+            Simulate Eredivisie Season
+          </Button>
+          <Button onClick={onReset} variant="outline" size="lg" className="w-full font-bold">
+            Play Again
+          </Button>
+        </div>
       </div>
     </Card>
+  );
+}
+
+function SeasonResultCard({
+  placed,
+  seasonResult,
+  onSimulateAgain,
+  onReset,
+}: {
+  placed: PlacedPlayer[];
+  seasonResult: TeamRecord[];
+  onSimulateAgain: () => void;
+  onReset: () => void;
+}) {
+  const info: PlacedPlayerInfo[] = placed.map((p) => ({
+    player: p.player,
+    club: p.club,
+    season: p.season,
+    positionPlayed: p.positionPlayed,
+  }));
+  const { averageRating, chemistry, positionBonus, teamStrength } = calculateTeamStrength(info);
+  const userTeam = seasonResult.find((t) => t.isUserTeam);
+  const position = userTeam ? seasonResult.indexOf(userTeam) + 1 : 0;
+  const verdict = getVerdict(position);
+
+  const verdictColor =
+    position === 1
+      ? "text-yellow-400"
+      : position <= 3
+        ? "text-primary"
+        : position <= 6
+          ? "text-blue-400"
+          : position <= 10
+            ? "text-muted-foreground"
+            : "text-destructive";
+
+  return (
+    <div className="mt-6 space-y-4">
+      {/* Summary card */}
+      <Card className="p-6 bg-gradient-to-br from-primary/15 via-card to-accent/10 border-primary/40">
+        <div className="text-center">
+          <div className="text-xs uppercase tracking-widest text-muted-foreground">
+            Season Simulation Result
+          </div>
+          <div className="text-5xl font-black text-primary mt-2 tabular-nums">
+            {position}{position === 1 ? "st" : position === 2 ? "nd" : position === 3 ? "rd" : "th"}
+          </div>
+          <div className={`text-xl font-bold mt-1 ${verdictColor}`}>
+            {verdict}
+          </div>
+          <div className="grid grid-cols-2 gap-x-6 gap-y-2 mt-4 text-sm max-w-xs mx-auto">
+            <div className="text-right text-muted-foreground">Team Strength</div>
+            <div className="font-bold tabular-nums">{teamStrength}</div>
+            <div className="text-right text-muted-foreground">Avg Rating</div>
+            <div className="font-bold tabular-nums">{averageRating.toFixed(1)}</div>
+            <div className="text-right text-muted-foreground">Chemistry</div>
+            <div className="font-bold tabular-nums">{chemistry}</div>
+            <div className="text-right text-muted-foreground">Position Bonus</div>
+            <div className="font-bold tabular-nums">{positionBonus}</div>
+            {userTeam && (
+              <>
+                <div className="text-right text-muted-foreground">Points</div>
+                <div className="font-bold tabular-nums">{userTeam.points}</div>
+                <div className="text-right text-muted-foreground">Record</div>
+                <div className="font-bold tabular-nums">
+                  {userTeam.wins}W {userTeam.draws}D {userTeam.losses}L
+                </div>
+                <div className="text-right text-muted-foreground">Goals</div>
+                <div className="font-bold tabular-nums">
+                  {userTeam.goalsFor}/{userTeam.goalsAgainst}
+                  <span className="text-muted-foreground ml-1">
+                    ({userTeam.goalDifference > 0 ? "+" : ""}{userTeam.goalDifference})
+                  </span>
+                </div>
+              </>
+            )}
+          </div>
+          <div className="mt-5 flex flex-col gap-2">
+            <Button onClick={onSimulateAgain} size="lg" className="w-full font-bold">
+              Simulate Again
+            </Button>
+            <Button onClick={onReset} variant="outline" size="lg" className="w-full font-bold">
+              Play Again
+            </Button>
+          </div>
+        </div>
+      </Card>
+
+      {/* League table */}
+      <Card className="p-4 overflow-hidden">
+        <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground mb-3">
+          Eredivisie Table
+        </h3>
+        <div className="overflow-x-auto -mx-4 px-4">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-border">
+                <th className="py-2 pr-2 text-left font-semibold text-muted-foreground w-8">#</th>
+                <th className="py-2 pr-2 text-left font-semibold text-muted-foreground">Club</th>
+                <th className="py-2 px-1 text-center font-semibold text-muted-foreground w-7">P</th>
+                <th className="py-2 px-1 text-center font-semibold text-muted-foreground w-7">W</th>
+                <th className="py-2 px-1 text-center font-semibold text-muted-foreground w-7">D</th>
+                <th className="py-2 px-1 text-center font-semibold text-muted-foreground w-7">L</th>
+                <th className="py-2 px-1 text-center font-semibold text-muted-foreground w-7">GF</th>
+                <th className="py-2 px-1 text-center font-semibold text-muted-foreground w-7">GA</th>
+                <th className="py-2 px-1 text-center font-semibold text-muted-foreground w-8">GD</th>
+                <th className="py-2 pl-1 text-center font-semibold text-muted-foreground w-8">Pts</th>
+              </tr>
+            </thead>
+            <tbody>
+              {seasonResult.map((team, idx) => {
+                const isUser = team.isUserTeam;
+                const pos = idx + 1;
+                return (
+                  <tr
+                    key={team.name}
+                    className={`border-b border-border/50 ${isUser ? "bg-primary/15 font-bold" : ""}`}
+                  >
+                    <td className={`py-1.5 pr-2 ${isUser ? "text-primary" : ""}`}>{pos}</td>
+                    <td className={`py-1.5 pr-2 truncate max-w-[120px] ${isUser ? "text-primary" : ""}`}>
+                      {isUser ? USER_TEAM_NAME : team.name}
+                    </td>
+                    <td className="py-1.5 px-1 text-center tabular-nums">{team.played}</td>
+                    <td className="py-1.5 px-1 text-center tabular-nums">{team.wins}</td>
+                    <td className="py-1.5 px-1 text-center tabular-nums">{team.draws}</td>
+                    <td className="py-1.5 px-1 text-center tabular-nums">{team.losses}</td>
+                    <td className="py-1.5 px-1 text-center tabular-nums">{team.goalsFor}</td>
+                    <td className="py-1.5 px-1 text-center tabular-nums">{team.goalsAgainst}</td>
+                    <td className="py-1.5 px-1 text-center tabular-nums">
+                      {team.goalDifference > 0 ? "+" : ""}{team.goalDifference}
+                    </td>
+                    <td className={`py-1.5 pl-1 text-center tabular-nums ${isUser ? "text-primary" : "font-semibold"}`}>
+                      {team.points}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
   );
 }
