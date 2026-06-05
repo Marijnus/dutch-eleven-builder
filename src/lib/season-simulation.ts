@@ -1,31 +1,5 @@
 import type { Player, FootballPosition } from "./eredivisie-data";
 
-export interface ClubStrength {
-  name: string;
-  strength: number;
-}
-
-export const eredivisieClubs: ClubStrength[] = [
-  { name: "PSV", strength: 88 },
-  { name: "Feyenoord", strength: 86 },
-  { name: "Ajax", strength: 84 },
-  { name: "AZ", strength: 82 },
-  { name: "FC Twente", strength: 81 },
-  { name: "FC Utrecht", strength: 78 },
-  { name: "SC Heerenveen", strength: 75 },
-  { name: "Sparta Rotterdam", strength: 74 },
-  { name: "NEC", strength: 74 },
-  { name: "Go Ahead Eagles", strength: 73 },
-  { name: "FC Groningen", strength: 72 },
-  { name: "Heracles Almelo", strength: 71 },
-  { name: "PEC Zwolle", strength: 70 },
-  { name: "Fortuna Sittard", strength: 70 },
-  { name: "Willem II", strength: 69 },
-  { name: "RKC Waalwijk", strength: 68 },
-  { name: "Excelsior", strength: 68 },
-  { name: "Almere City FC", strength: 67 },
-];
-
 export const USER_TEAM_NAME = "Your Eredivisie XI";
 
 export interface PlacedPlayerInfo {
@@ -33,6 +7,10 @@ export interface PlacedPlayerInfo {
   club: string;
   season: string;
   positionPlayed: FootballPosition;
+}
+
+export function calculateAverageRating(placed: PlacedPlayerInfo[]): number {
+  return placed.reduce((sum, p) => sum + p.player.rating, 0) / placed.length;
 }
 
 export function calculateChemistry(placed: PlacedPlayerInfo[]): number {
@@ -63,143 +41,126 @@ export function calculatePositionBonus(placed: PlacedPlayerInfo[]): number {
 export function calculateTeamStrength(placed: PlacedPlayerInfo[]): {
   averageRating: number;
   chemistry: number;
+  chemistryBonus: number;
   positionBonus: number;
   teamStrength: number;
 } {
-  const averageRating =
-    placed.reduce((sum, p) => sum + p.player.rating, 0) / placed.length;
+  const averageRating = calculateAverageRating(placed);
   const chemistry = calculateChemistry(placed);
+  const chemistryBonus = Math.min(10, Math.round(chemistry / 5));
   const positionBonus = calculatePositionBonus(placed);
-  const teamStrength =
-    averageRating +
-    Math.min(10, Math.round(chemistry / 5)) +
-    Math.min(5, positionBonus);
-  return { averageRating, chemistry, positionBonus, teamStrength };
+  const raw = averageRating + chemistryBonus + Math.min(5, positionBonus);
+  const teamStrength = Math.max(60, Math.min(99, raw));
+  return { averageRating, chemistry, chemistryBonus, positionBonus, teamStrength };
 }
 
-export interface TeamRecord {
-  name: string;
-  strength: number;
-  played: number;
+type MatchResult = "W" | "D" | "L";
+
+export interface MatchScore {
+  match: number;
+  result: MatchResult;
+  goalsFor: number;
+  goalsAgainst: number;
+}
+
+export interface SeasonResult {
   wins: number;
   draws: number;
   losses: number;
+  points: number;
   goalsFor: number;
   goalsAgainst: number;
   goalDifference: number;
-  points: number;
-  isUserTeam: boolean;
+  matches: MatchScore[];
 }
 
-function simulateMatch(teamA: TeamRecord, teamB: TeamRecord): { goalsA: number; goalsB: number } {
-  const strengthDifference = teamA.strength - teamB.strength;
-  const randomFactor = Math.random() * 20 - 10;
-  const performanceDifference = strengthDifference + randomFactor;
+function getProbabilities(teamStrength: number): { win: number; draw: number; loss: number } {
+  if (teamStrength >= 95) return { win: 0.88, draw: 0.10, loss: 0.02 };
+  if (teamStrength >= 90) return { win: 0.78, draw: 0.16, loss: 0.06 };
+  if (teamStrength >= 85) return { win: 0.68, draw: 0.20, loss: 0.12 };
+  if (teamStrength >= 80) return { win: 0.55, draw: 0.25, loss: 0.20 };
+  if (teamStrength >= 75) return { win: 0.42, draw: 0.28, loss: 0.30 };
+  return { win: 0.30, draw: 0.25, loss: 0.45 };
+}
 
-  let goalsA: number;
-  let goalsB: number;
+function randInt(min: number, max: number): number {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
 
-  if (performanceDifference > 10) {
-    goalsA = Math.floor(Math.random() * 3) + 2;
-    goalsB = Math.floor(Math.random() * 2);
-  } else if (performanceDifference > 3) {
-    goalsA = Math.floor(Math.random() * 3) + 1;
-    goalsB = Math.floor(Math.random() * 2);
-  } else if (performanceDifference > -3) {
-    goalsA = Math.floor(Math.random() * 3);
-    goalsB = Math.floor(Math.random() * 3);
-  } else if (performanceDifference > -10) {
-    goalsA = Math.floor(Math.random() * 2);
-    goalsB = Math.floor(Math.random() * 3) + 1;
-  } else {
-    goalsA = Math.floor(Math.random() * 2);
-    goalsB = Math.floor(Math.random() * 3) + 2;
+export function generateMatchScore(result: MatchResult): { goalsFor: number; goalsAgainst: number } {
+  if (result === "W") {
+    const goalsFor = randInt(2, 5);
+    const goalsAgainst = Math.min(randInt(0, 2), goalsFor - 1);
+    return { goalsFor, goalsAgainst };
+  }
+  if (result === "D") {
+    const drawScores = [
+      [0, 0],
+      [1, 1],
+      [1, 1],
+      [2, 2],
+      [2, 2],
+      [0, 0],
+      [1, 1],
+      [3, 3],
+    ];
+    const [gf, ga] = drawScores[Math.floor(Math.random() * drawScores.length)];
+    return { goalsFor: gf, goalsAgainst: ga };
+  }
+  // Loss
+  const goalsAgainst = randInt(1, 4);
+  const goalsFor = Math.min(randInt(0, 2), goalsAgainst - 1);
+  return { goalsFor, goalsAgainst };
+}
+
+export function simulateSeason(teamStrength: number): SeasonResult {
+  const { win, draw, loss } = getProbabilities(teamStrength);
+  const matches: MatchScore[] = [];
+
+  for (let i = 1; i <= 34; i++) {
+    const r = Math.random();
+    let result: MatchResult;
+    if (r < win) result = "W";
+    else if (r < win + draw) result = "D";
+    else result = "L";
+
+    const { goalsFor, goalsAgainst } = generateMatchScore(result);
+    matches.push({ match: i, result, goalsFor, goalsAgainst });
   }
 
-  return { goalsA, goalsB };
-}
+  const wins = matches.filter((m) => m.result === "W").length;
+  const draws = matches.filter((m) => m.result === "D").length;
+  const losses = matches.filter((m) => m.result === "L").length;
+  const goalsFor = matches.reduce((s, m) => s + m.goalsFor, 0);
+  const goalsAgainst = matches.reduce((s, m) => s + m.goalsAgainst, 0);
 
-function applyResult(team: TeamRecord, goalsFor: number, goalsAgainst: number) {
-  team.played += 1;
-  team.goalsFor += goalsFor;
-  team.goalsAgainst += goalsAgainst;
-  team.goalDifference += goalsFor - goalsAgainst;
-  if (goalsFor > goalsAgainst) {
-    team.wins += 1;
-    team.points += 3;
-  } else if (goalsFor === goalsAgainst) {
-    team.draws += 1;
-    team.points += 1;
-  } else {
-    team.losses += 1;
-  }
-}
-
-export function simulateSeason(
-  userStrength: number,
-): TeamRecord[] {
-  const teams: TeamRecord[] = [
-    ...eredivisieClubs.map((c) => ({
-      name: c.name,
-      strength: c.strength,
-      played: 0,
-      wins: 0,
-      draws: 0,
-      losses: 0,
-      goalsFor: 0,
-      goalsAgainst: 0,
-      goalDifference: 0,
-      points: 0,
-      isUserTeam: false,
-    })),
-  ];
-
-  // Replace the weakest club (Almere City FC) with user team
-  const replaceIdx = teams.findIndex((t) => t.name === "Almere City FC");
-  teams[replaceIdx] = {
-    name: USER_TEAM_NAME,
-    strength: userStrength,
-    played: 0,
-    wins: 0,
-    draws: 0,
-    losses: 0,
-    goalsFor: 0,
-    goalsAgainst: 0,
-    goalDifference: 0,
-    points: 0,
-    isUserTeam: true,
+  return {
+    wins,
+    draws,
+    losses,
+    points: wins * 3 + draws,
+    goalsFor,
+    goalsAgainst,
+    goalDifference: goalsFor - goalsAgainst,
+    matches,
   };
-
-  // Round-robin: each team plays every other team twice (home & away) = 34 matches
-  for (let i = 0; i < teams.length; i++) {
-    for (let j = i + 1; j < teams.length; j++) {
-      // Home match for i
-      const home = simulateMatch(teams[i], teams[j]);
-      applyResult(teams[i], home.goalsA, home.goalsB);
-      applyResult(teams[j], home.goalsB, home.goalsA);
-
-      // Home match for j (return fixture)
-      const away = simulateMatch(teams[j], teams[i]);
-      applyResult(teams[j], away.goalsA, away.goalsB);
-      applyResult(teams[i], away.goalsB, away.goalsA);
-    }
-  }
-
-  // Sort by points, then goal difference, then goals for
-  teams.sort((a, b) => {
-    if (b.points !== a.points) return b.points - a.points;
-    if (b.goalDifference !== a.goalDifference) return b.goalDifference - a.goalDifference;
-    return b.goalsFor - a.goalsFor;
-  });
-
-  return teams;
 }
 
-export function getVerdict(position: number): string {
-  if (position === 1) return "Champions of the Eredivisie";
-  if (position <= 3) return "Champions League-level season";
-  if (position <= 6) return "European football secured";
-  if (position <= 10) return "Solid mid-table season";
-  if (position <= 15) return "Disappointing season";
-  return "Relegation battle disaster";
+export function getSeasonVerdict(result: SeasonResult): string {
+  if (result.wins === 34 && result.draws === 0 && result.losses === 0)
+    return "34-0. Perfect season.";
+  if (result.points >= 90) return "Legendary champions";
+  if (result.points >= 80) return "Eredivisie champions";
+  if (result.points >= 70) return "Champions League-level season";
+  if (result.points >= 60) return "European football secured";
+  if (result.points >= 45) return "Mid-table season";
+  return "Disappointing season";
+}
+
+export function isUnbeaten(result: SeasonResult): boolean {
+  return result.losses === 0;
+}
+
+export function isPerfect(result: SeasonResult): boolean {
+  return result.wins === 34 && result.losses === 0 && result.draws === 0;
 }

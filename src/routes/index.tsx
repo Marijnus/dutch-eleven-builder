@@ -13,16 +13,18 @@ import {
 import {
   calculateTeamStrength,
   simulateSeason,
-  getVerdict,
+  getSeasonVerdict,
+  isUnbeaten,
+  isPerfect,
   USER_TEAM_NAME,
-  type TeamRecord,
+  type SeasonResult,
   type PlacedPlayerInfo,
 } from "@/lib/season-simulation";
 
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Eredivisie XI — Build Your Dream Squad" },
+      { title: "Eredivisie XI — Can your XI go 34-0?" },
       {
         name: "description",
         content:
@@ -33,7 +35,6 @@ export const Route = createFileRoute("/")({
   component: Game,
 });
 
-// 4-3-3 formation slot definitions
 type SlotKey =
   | "GK"
   | "LB"
@@ -49,8 +50,8 @@ type SlotKey =
 
 interface SlotDef {
   key: SlotKey;
-  label: string; // shown on pitch
-  accepts: FootballPosition; // which position fills this slot
+  label: string;
+  accepts: FootballPosition;
   top: string;
   left: string;
 }
@@ -88,7 +89,7 @@ function Game() {
   const [rolling, setRolling] = useState(false);
   const [pickFor, setPickFor] = useState<Player | null>(null);
   const [highlightedPlayerId, setHighlightedPlayerId] = useState<string | null>(null);
-  const [seasonResult, setSeasonResult] = useState<TeamRecord[] | null>(null);
+  const [seasonResult, setSeasonResult] = useState<SeasonResult | null>(null);
 
   const positionPickerRef = useRef<HTMLDivElement>(null);
 
@@ -124,7 +125,6 @@ function Game() {
         (p.positions ?? []).some((pos) => findFreeSlotFor(pos) !== null),
     );
 
-  // Auto-scroll to position picker when a player is selected for picking
   useEffect(() => {
     if (pickFor && positionPickerRef.current) {
       positionPickerRef.current.scrollIntoView({
@@ -154,7 +154,7 @@ function Game() {
   const openPicker = (player: Player) => {
     if (selectedPlayerIds.has(player.id)) return;
     const opts = availablePositionsFor(player);
-    if (!opts.some((o) => o.slot)) return; // no available positions
+    if (!opts.some((o) => o.slot)) return;
     setPickFor(player);
     setHighlightedPlayerId(player.id);
   };
@@ -205,8 +205,7 @@ function Game() {
       positionPlayed: p.positionPlayed,
     }));
     const { teamStrength } = calculateTeamStrength(info);
-    const result = simulateSeason(teamStrength);
-    setSeasonResult(result);
+    setSeasonResult(simulateSeason(teamStrength));
   };
 
   const handleSimulateAgain = () => {
@@ -218,8 +217,7 @@ function Game() {
       positionPlayed: p.positionPlayed,
     }));
     const { teamStrength } = calculateTeamStrength(info);
-    const result = simulateSeason(teamStrength);
-    setSeasonResult(result);
+    setSeasonResult(simulateSeason(teamStrength));
   };
 
   const placed = Object.values(occupiedSlots) as PlacedPlayer[];
@@ -229,8 +227,6 @@ function Game() {
       : 0;
 
   const currentHasPlayable = current ? teamHasAnyPlayable(current) : false;
-
-  // Position options for the currently picked player
   const pickForOptions = pickFor ? availablePositionsFor(pickFor) : [];
 
   return (
@@ -289,7 +285,7 @@ function Game() {
             }}
           />
           {isFull && !seasonResult && (
-            <FinalCard avg={avg} placed={placed} onReset={reset} onSimulate={handleSimulate} />
+            <FinalCard avg={avg} placed={placed} onSimulate={handleSimulate} />
           )}
           {isFull && seasonResult && (
             <SeasonResultCard
@@ -453,7 +449,6 @@ function Game() {
           </Card>
         </aside>
       </main>
-
     </div>
   );
 }
@@ -676,16 +671,13 @@ function Pitch({
   );
 }
 
-
 function FinalCard({
   avg,
   placed,
-  onReset,
   onSimulate,
 }: {
   avg: number;
   placed: PlacedPlayer[];
-  onReset: () => void;
   onSimulate: () => void;
 }) {
   const tier =
@@ -702,7 +694,10 @@ function FinalCard({
   return (
     <Card className="mt-6 p-6 bg-gradient-to-br from-primary/15 via-card to-accent/10 border-primary/40">
       <div className="text-center">
-        <div className="text-xs uppercase tracking-widest text-muted-foreground">
+        <div className="text-lg font-black tracking-tight text-foreground">
+          Can your XI go 34-0?
+        </div>
+        <div className="text-xs uppercase tracking-widest text-muted-foreground mt-1">
           Final Squad Rating
         </div>
         <div className="text-6xl font-black text-primary mt-1 tabular-nums">
@@ -712,14 +707,9 @@ function FinalCard({
         <div className="text-xs text-muted-foreground mt-2">
           Players drawn from {clubs} different club-season{clubs > 1 ? "s" : ""}.
         </div>
-        <div className="mt-5 flex flex-col gap-2">
-          <Button onClick={onSimulate} size="lg" className="w-full font-bold">
-            Simulate Eredivisie Season
-          </Button>
-          <Button onClick={onReset} variant="outline" size="lg" className="w-full font-bold">
-            Play Again
-          </Button>
-        </div>
+        <Button onClick={onSimulate} size="lg" className="mt-5 font-bold w-full">
+          Simulate Eredivisie Season
+        </Button>
       </div>
     </Card>
   );
@@ -732,7 +722,7 @@ function SeasonResultCard({
   onReset,
 }: {
   placed: PlacedPlayer[];
-  seasonResult: TeamRecord[];
+  seasonResult: SeasonResult;
   onSimulateAgain: () => void;
   onReset: () => void;
 }) {
@@ -742,126 +732,140 @@ function SeasonResultCard({
     season: p.season,
     positionPlayed: p.positionPlayed,
   }));
-  const { averageRating, chemistry, positionBonus, teamStrength } = calculateTeamStrength(info);
-  const userTeam = seasonResult.find((t) => t.isUserTeam);
-  const position = userTeam ? seasonResult.indexOf(userTeam) + 1 : 0;
-  const verdict = getVerdict(position);
+  const { averageRating, chemistry, chemistryBonus, positionBonus, teamStrength } = calculateTeamStrength(info);
+  const verdict = getSeasonVerdict(seasonResult);
+  const unbeaten = isUnbeaten(seasonResult);
+  const perfect = isPerfect(seasonResult);
 
-  const verdictColor =
-    position === 1
-      ? "text-yellow-400"
-      : position <= 3
+  const isCelebratory = seasonResult.points >= 80;
+  const isSpecial = unbeaten || perfect;
+
+  const [matchLogOpen, setMatchLogOpen] = useState(false);
+
+  const verdictColor = perfect
+    ? "text-yellow-400"
+    : unbeaten
+      ? "text-yellow-300"
+      : seasonResult.points >= 80
         ? "text-primary"
-        : position <= 6
+        : seasonResult.points >= 60
           ? "text-blue-400"
-          : position <= 10
+          : seasonResult.points >= 45
             ? "text-muted-foreground"
             : "text-destructive";
 
   return (
     <div className="mt-6 space-y-4">
-      {/* Summary card */}
-      <Card className="p-6 bg-gradient-to-br from-primary/15 via-card to-accent/10 border-primary/40">
+      <Card className={`p-6 border-primary/40 ${isSpecial ? "bg-gradient-to-br from-yellow-500/15 via-primary/20 to-accent/15 border-yellow-500/40" : isCelebratory ? "bg-gradient-to-br from-primary/15 via-card to-accent/10" : "bg-card"}`}>
         <div className="text-center">
-          <div className="text-xs uppercase tracking-widest text-muted-foreground">
-            Season Simulation Result
+          <div className="text-sm font-bold uppercase tracking-widest text-muted-foreground">
+            Can your XI go 34-0?
           </div>
-          <div className="text-5xl font-black text-primary mt-2 tabular-nums">
-            {position}{position === 1 ? "st" : position === 2 ? "nd" : position === 3 ? "rd" : "th"}
+
+          {/* W-D-L record */}
+          <div className="mt-4">
+            <div className={`text-5xl sm:text-7xl font-black tabular-nums ${perfect ? "text-yellow-400" : unbeaten ? "text-primary" : "text-foreground"}`}>
+              {seasonResult.wins}-{seasonResult.draws}-{seasonResult.losses}
+            </div>
+            <div className="flex justify-center gap-8 sm:gap-12 mt-2 text-xs font-bold uppercase tracking-widest text-muted-foreground">
+              <span>W</span>
+              <span>D</span>
+              <span>L</span>
+            </div>
           </div>
-          <div className={`text-xl font-bold mt-1 ${verdictColor}`}>
+
+          {/* Points */}
+          <div className="mt-4">
+            <span className="text-3xl sm:text-4xl font-black text-primary tabular-nums">
+              {seasonResult.points}
+            </span>
+            <span className="text-lg text-muted-foreground font-semibold ml-1">
+              / 102 points
+            </span>
+          </div>
+
+          {/* Goals */}
+          <div className="mt-3 text-sm text-muted-foreground">
+            Goals:{" "}
+            <span className="font-bold text-foreground">{seasonResult.goalsFor}</span> scored,{" "}
+            <span className="font-bold text-foreground">{seasonResult.goalsAgainst}</span> conceded,{" "}
+            <span className={`font-bold ${seasonResult.goalDifference > 0 ? "text-primary" : seasonResult.goalDifference < 0 ? "text-destructive" : "text-foreground"}`}>
+              {seasonResult.goalDifference > 0 ? "+" : ""}{seasonResult.goalDifference} GD
+            </span>
+          </div>
+
+          {/* Special messages */}
+          {perfect && (
+            <div className="mt-4 text-xl font-black text-yellow-400 animate-pulse">
+              34-0. Perfect season.
+            </div>
+          )}
+          {unbeaten && !perfect && (
+            <div className="mt-4 text-lg font-black text-primary">
+              Invincibles season!
+            </div>
+          )}
+
+          {/* Verdict */}
+          <div className={`mt-3 text-xl font-bold ${verdictColor}`}>
             {verdict}
           </div>
-          <div className="grid grid-cols-2 gap-x-6 gap-y-2 mt-4 text-sm max-w-xs mx-auto">
-            <div className="text-right text-muted-foreground">Team Strength</div>
-            <div className="font-bold tabular-nums">{teamStrength}</div>
+
+          {/* Team strength breakdown */}
+          <div className="mt-5 grid grid-cols-2 gap-x-6 gap-y-2 text-sm max-w-xs mx-auto">
             <div className="text-right text-muted-foreground">Avg Rating</div>
             <div className="font-bold tabular-nums">{averageRating.toFixed(1)}</div>
             <div className="text-right text-muted-foreground">Chemistry</div>
-            <div className="font-bold tabular-nums">{chemistry}</div>
+            <div className="font-bold tabular-nums">{chemistry} <span className="text-muted-foreground font-normal">(+{chemistryBonus})</span></div>
             <div className="text-right text-muted-foreground">Position Bonus</div>
-            <div className="font-bold tabular-nums">{positionBonus}</div>
-            {userTeam && (
-              <>
-                <div className="text-right text-muted-foreground">Points</div>
-                <div className="font-bold tabular-nums">{userTeam.points}</div>
-                <div className="text-right text-muted-foreground">Record</div>
-                <div className="font-bold tabular-nums">
-                  {userTeam.wins}W {userTeam.draws}D {userTeam.losses}L
-                </div>
-                <div className="text-right text-muted-foreground">Goals</div>
-                <div className="font-bold tabular-nums">
-                  {userTeam.goalsFor}/{userTeam.goalsAgainst}
-                  <span className="text-muted-foreground ml-1">
-                    ({userTeam.goalDifference > 0 ? "+" : ""}{userTeam.goalDifference})
-                  </span>
-                </div>
-              </>
-            )}
+            <div className="font-bold tabular-nums">+{Math.min(5, positionBonus)}</div>
+            <div className="text-right text-muted-foreground">Team Strength</div>
+            <div className="font-bold tabular-nums text-primary">{teamStrength}</div>
           </div>
-          <div className="mt-5 flex flex-col gap-2">
+
+          {/* Buttons */}
+          <div className="mt-6 flex flex-col gap-2">
             <Button onClick={onSimulateAgain} size="lg" className="w-full font-bold">
               Simulate Again
             </Button>
             <Button onClick={onReset} variant="outline" size="lg" className="w-full font-bold">
-              Play Again
+              Build New XI
             </Button>
           </div>
         </div>
       </Card>
 
-      {/* League table */}
-      <Card className="p-4 overflow-hidden">
-        <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground mb-3">
-          Eredivisie Table
-        </h3>
-        <div className="overflow-x-auto -mx-4 px-4">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b border-border">
-                <th className="py-2 pr-2 text-left font-semibold text-muted-foreground w-8">#</th>
-                <th className="py-2 pr-2 text-left font-semibold text-muted-foreground">Club</th>
-                <th className="py-2 px-1 text-center font-semibold text-muted-foreground w-7">P</th>
-                <th className="py-2 px-1 text-center font-semibold text-muted-foreground w-7">W</th>
-                <th className="py-2 px-1 text-center font-semibold text-muted-foreground w-7">D</th>
-                <th className="py-2 px-1 text-center font-semibold text-muted-foreground w-7">L</th>
-                <th className="py-2 px-1 text-center font-semibold text-muted-foreground w-7">GF</th>
-                <th className="py-2 px-1 text-center font-semibold text-muted-foreground w-7">GA</th>
-                <th className="py-2 px-1 text-center font-semibold text-muted-foreground w-8">GD</th>
-                <th className="py-2 pl-1 text-center font-semibold text-muted-foreground w-8">Pts</th>
-              </tr>
-            </thead>
-            <tbody>
-              {seasonResult.map((team, idx) => {
-                const isUser = team.isUserTeam;
-                const pos = idx + 1;
-                return (
-                  <tr
-                    key={team.name}
-                    className={`border-b border-border/50 ${isUser ? "bg-primary/15 font-bold" : ""}`}
-                  >
-                    <td className={`py-1.5 pr-2 ${isUser ? "text-primary" : ""}`}>{pos}</td>
-                    <td className={`py-1.5 pr-2 truncate max-w-[120px] ${isUser ? "text-primary" : ""}`}>
-                      {isUser ? USER_TEAM_NAME : team.name}
-                    </td>
-                    <td className="py-1.5 px-1 text-center tabular-nums">{team.played}</td>
-                    <td className="py-1.5 px-1 text-center tabular-nums">{team.wins}</td>
-                    <td className="py-1.5 px-1 text-center tabular-nums">{team.draws}</td>
-                    <td className="py-1.5 px-1 text-center tabular-nums">{team.losses}</td>
-                    <td className="py-1.5 px-1 text-center tabular-nums">{team.goalsFor}</td>
-                    <td className="py-1.5 px-1 text-center tabular-nums">{team.goalsAgainst}</td>
-                    <td className="py-1.5 px-1 text-center tabular-nums">
-                      {team.goalDifference > 0 ? "+" : ""}{team.goalDifference}
-                    </td>
-                    <td className={`py-1.5 pl-1 text-center tabular-nums ${isUser ? "text-primary" : "font-semibold"}`}>
-                      {team.points}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+      {/* Match log */}
+      <Card className="p-4">
+        <button
+          onClick={() => setMatchLogOpen(!matchLogOpen)}
+          className="w-full flex items-center justify-between text-sm font-bold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <span>Match Log (34 matches)</span>
+          <span className="text-xs">{matchLogOpen ? "Hide" : "Show"}</span>
+        </button>
+        {matchLogOpen && (
+          <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-1.5 text-xs">
+            {seasonResult.matches.map((m) => (
+              <div
+                key={m.match}
+                className={`rounded px-2 py-1.5 flex items-center justify-between tabular-nums ${
+                  m.result === "W"
+                    ? "bg-primary/15 text-primary"
+                    : m.result === "D"
+                      ? "bg-muted text-muted-foreground"
+                      : "bg-destructive/15 text-destructive"
+                }`}
+              >
+                <span className="font-bold">M{m.match}</span>
+                <span className="font-bold">{m.result}</span>
+                <span className="text-muted-foreground">
+                  {m.goalsFor}-{m.goalsAgainst}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </Card>
     </div>
   );
