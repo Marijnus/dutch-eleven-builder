@@ -205,9 +205,31 @@ function Game() {
 
       <main className="mx-auto grid max-w-6xl gap-6 px-6 py-8 lg:grid-cols-[1fr_420px]">
         <section>
-          <Pitch occupied={occupiedSlots} />
+          {pickFor && (
+            <div className="mb-3 flex items-center justify-between gap-3 rounded-md border border-primary/40 bg-primary/10 px-4 py-2 text-sm">
+              <span>
+                Placing{" "}
+                <span className="font-bold">{pickFor.name}</span> — click a
+                highlighted slot on the pitch.
+              </span>
+              <button
+                onClick={() => setPickFor(null)}
+                className="text-xs text-muted-foreground hover:text-destructive transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+          <Pitch
+            occupied={occupiedSlots}
+            pickFor={pickFor}
+            onPickSlot={(slot) => {
+              if (pickFor) confirmPick(pickFor, slot.accepts);
+            }}
+          />
           {isFull && <FinalCard avg={avg} placed={placed} onReset={reset} />}
         </section>
+
 
         <aside className="space-y-4">
           {!isFull && (
