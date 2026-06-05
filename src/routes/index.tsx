@@ -435,9 +435,23 @@ function PositionPill({ pos }: { pos: FootballPosition }) {
 
 function Pitch({
   occupied,
+  pickFor,
+  onPickSlot,
 }: {
   occupied: Partial<Record<SlotKey, PlacedPlayer>>;
+  pickFor: Player | null;
+  onPickSlot: (slot: SlotDef) => void;
 }) {
+  const eligibleSlotKeys = new Set<SlotKey>();
+  if (pickFor) {
+    const positions = new Set(pickFor.positions ?? []);
+    for (const s of FORMATION_SLOTS) {
+      if (!occupied[s.key] && positions.has(s.accepts)) {
+        eligibleSlotKeys.add(s.key);
+      }
+    }
+  }
+
   return (
     <div className="relative aspect-[3/4] w-full max-w-2xl mx-auto rounded-2xl overflow-hidden pitch-bg shadow-2xl ring-1 ring-border">
       <div
@@ -470,14 +484,23 @@ function Pitch({
         const colors = placed
           ? clubColors[placed.club] ?? fallbackClubColor
           : null;
+        const eligible = eligibleSlotKeys.has(slot.key);
+        const clickable = eligible && !placed;
         return (
           <div
             key={slot.key}
             className="absolute -translate-x-1/2 -translate-y-1/2 flex flex-col items-center gap-1"
             style={{ left: slot.left, top: slot.top }}
           >
-            <div
-              className="w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center text-sm font-black shadow-lg ring-2"
+            <button
+              type="button"
+              disabled={!clickable}
+              onClick={() => clickable && onPickSlot(slot)}
+              className={`w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center text-sm font-black shadow-lg ring-2 transition-transform ${
+                clickable
+                  ? "cursor-pointer hover:scale-110 animate-pulse"
+                  : "cursor-default disabled:cursor-default"
+              }`}
               style={
                 placed && colors
                   ? {
@@ -486,15 +509,21 @@ function Pitch({
                       borderColor: colors.secondary,
                       boxShadow: `0 0 0 2px ${colors.secondary}`,
                     }
-                  : {
-                      backgroundColor: "rgba(0,0,0,0.35)",
-                      color: "rgba(255,255,255,0.55)",
-                      boxShadow: "0 0 0 2px rgba(255,255,255,0.3)",
-                    }
+                  : clickable
+                    ? {
+                        backgroundColor: "var(--primary)",
+                        color: "var(--primary-foreground)",
+                        boxShadow: "0 0 0 3px var(--primary), 0 0 18px var(--primary)",
+                      }
+                    : {
+                        backgroundColor: "rgba(0,0,0,0.35)",
+                        color: "rgba(255,255,255,0.55)",
+                        boxShadow: "0 0 0 2px rgba(255,255,255,0.3)",
+                      }
               }
             >
               {placed ? placed.player.rating : slot.label}
-            </div>
+            </button>
             {placed ? (
               <div className="text-center">
                 <div className="text-[11px] font-bold leading-tight bg-background/80 px-1.5 py-0.5 rounded text-foreground whitespace-nowrap">
@@ -515,6 +544,7 @@ function Pitch({
     </div>
   );
 }
+
 
 function FinalCard({
   avg,
