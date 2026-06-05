@@ -348,59 +348,11 @@ function Game() {
         </aside>
       </main>
 
-      <PositionPickerDialog
-        player={pickFor}
-        onClose={() => setPickFor(null)}
-        onConfirm={confirmPick}
-        findFreeSlotFor={findFreeSlotFor}
-      />
     </div>
   );
 }
 
-function PositionPickerDialog({
-  player,
-  onClose,
-  onConfirm,
-  findFreeSlotFor,
-}: {
-  player: Player | null;
-  onClose: () => void;
-  onConfirm: (p: Player, pos: FootballPosition) => void;
-  findFreeSlotFor: (pos: FootballPosition) => SlotKey | null;
-}) {
-  return (
-    <Dialog open={!!player} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="sm:max-w-sm">
-        <DialogHeader>
-          <DialogTitle>
-            Choose position for {player?.name}
-          </DialogTitle>
-          <DialogDescription>
-            Only available formation slots are enabled.
-          </DialogDescription>
-        </DialogHeader>
-        {player && (
-          <div className="grid grid-cols-3 gap-2 pt-2">
-            {Array.from(new Set(player.positions)).map((pos) => {
-              const free = findFreeSlotFor(pos);
-              return (
-                <button
-                  key={pos}
-                  disabled={!free}
-                  onClick={() => onConfirm(player, pos)}
-                  className="rounded-md border border-border bg-secondary/40 py-3 font-bold text-sm hover:bg-primary/20 hover:border-primary transition-colors disabled:opacity-30 disabled:line-through disabled:cursor-not-allowed"
-                >
-                  {pos}
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </DialogContent>
-    </Dialog>
-  );
-}
+
 
 function SlotProgress({
   occupied,
