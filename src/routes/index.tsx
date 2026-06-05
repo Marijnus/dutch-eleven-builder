@@ -3,13 +3,6 @@ import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from "@/components/ui/dialog";
-import {
   teamSeasons,
   clubColors,
   fallbackClubColor,
@@ -212,9 +205,31 @@ function Game() {
 
       <main className="mx-auto grid max-w-6xl gap-6 px-6 py-8 lg:grid-cols-[1fr_420px]">
         <section>
-          <Pitch occupied={occupiedSlots} />
+          {pickFor && (
+            <div className="mb-3 flex items-center justify-between gap-3 rounded-md border border-primary/40 bg-primary/10 px-4 py-2 text-sm">
+              <span>
+                Placing{" "}
+                <span className="font-bold">{pickFor.name}</span> — click a
+                highlighted slot on the pitch.
+              </span>
+              <button
+                onClick={() => setPickFor(null)}
+                className="text-xs text-muted-foreground hover:text-destructive transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+          <Pitch
+            occupied={occupiedSlots}
+            pickFor={pickFor}
+            onPickSlot={(slot) => {
+              if (pickFor) confirmPick(pickFor, slot.accepts);
+            }}
+          />
           {isFull && <FinalCard avg={avg} placed={placed} onReset={reset} />}
         </section>
+
 
         <aside className="space-y-4">
           {!isFull && (
@@ -355,59 +370,11 @@ function Game() {
         </aside>
       </main>
 
-      <PositionPickerDialog
-        player={pickFor}
-        onClose={() => setPickFor(null)}
-        onConfirm={confirmPick}
-        findFreeSlotFor={findFreeSlotFor}
-      />
     </div>
   );
 }
 
-function PositionPickerDialog({
-  player,
-  onClose,
-  onConfirm,
-  findFreeSlotFor,
-}: {
-  player: Player | null;
-  onClose: () => void;
-  onConfirm: (p: Player, pos: FootballPosition) => void;
-  findFreeSlotFor: (pos: FootballPosition) => SlotKey | null;
-}) {
-  return (
-    <Dialog open={!!player} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="sm:max-w-sm">
-        <DialogHeader>
-          <DialogTitle>
-            Choose position for {player?.name}
-          </DialogTitle>
-          <DialogDescription>
-            Only available formation slots are enabled.
-          </DialogDescription>
-        </DialogHeader>
-        {player && (
-          <div className="grid grid-cols-3 gap-2 pt-2">
-            {Array.from(new Set(player.positions)).map((pos) => {
-              const free = findFreeSlotFor(pos);
-              return (
-                <button
-                  key={pos}
-                  disabled={!free}
-                  onClick={() => onConfirm(player, pos)}
-                  className="rounded-md border border-border bg-secondary/40 py-3 font-bold text-sm hover:bg-primary/20 hover:border-primary transition-colors disabled:opacity-30 disabled:line-through disabled:cursor-not-allowed"
-                >
-                  {pos}
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </DialogContent>
-    </Dialog>
-  );
-}
+
 
 function SlotProgress({
   occupied,
@@ -468,9 +435,23 @@ function PositionPill({ pos }: { pos: FootballPosition }) {
 
 function Pitch({
   occupied,
+  pickFor,
+  onPickSlot,
 }: {
   occupied: Partial<Record<SlotKey, PlacedPlayer>>;
+  pickFor: Player | null;
+  onPickSlot: (slot: SlotDef) => void;
 }) {
+  const eligibleSlotKeys = new Set<SlotKey>();
+  if (pickFor) {
+    const positions = new Set(pickFor.positions ?? []);
+    for (const s of FORMATION_SLOTS) {
+      if (!occupied[s.key] && positions.has(s.accepts)) {
+        eligibleSlotKeys.add(s.key);
+      }
+    }
+  }
+
   return (
     <div className="relative aspect-[3/4] w-full max-w-2xl mx-auto rounded-2xl overflow-hidden pitch-bg shadow-2xl ring-1 ring-border">
       <div
@@ -503,14 +484,23 @@ function Pitch({
         const colors = placed
           ? clubColors[placed.club] ?? fallbackClubColor
           : null;
+        const eligible = eligibleSlotKeys.has(slot.key);
+        const clickable = eligible && !placed;
         return (
           <div
             key={slot.key}
             className="absolute -translate-x-1/2 -translate-y-1/2 flex flex-col items-center gap-1"
             style={{ left: slot.left, top: slot.top }}
           >
-            <div
-              className="w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center text-sm font-black shadow-lg ring-2"
+            <button
+              type="button"
+              disabled={!clickable}
+              onClick={() => clickable && onPickSlot(slot)}
+              className={`w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center text-sm font-black shadow-lg ring-2 transition-transform ${
+                clickable
+                  ? "cursor-pointer hover:scale-110 animate-pulse"
+                  : "cursor-default disabled:cursor-default"
+              }`}
               style={
                 placed && colors
                   ? {
@@ -519,15 +509,21 @@ function Pitch({
                       borderColor: colors.secondary,
                       boxShadow: `0 0 0 2px ${colors.secondary}`,
                     }
-                  : {
-                      backgroundColor: "rgba(0,0,0,0.35)",
-                      color: "rgba(255,255,255,0.55)",
-                      boxShadow: "0 0 0 2px rgba(255,255,255,0.3)",
-                    }
+                  : clickable
+                    ? {
+                        backgroundColor: "var(--primary)",
+                        color: "var(--primary-foreground)",
+                        boxShadow: "0 0 0 3px var(--primary), 0 0 18px var(--primary)",
+                      }
+                    : {
+                        backgroundColor: "rgba(0,0,0,0.35)",
+                        color: "rgba(255,255,255,0.55)",
+                        boxShadow: "0 0 0 2px rgba(255,255,255,0.3)",
+                      }
               }
             >
               {placed ? placed.player.rating : slot.label}
-            </div>
+            </button>
             {placed ? (
               <div className="text-center">
                 <div className="text-[11px] font-bold leading-tight bg-background/80 px-1.5 py-0.5 rounded text-foreground whitespace-nowrap">
@@ -548,6 +544,7 @@ function Pitch({
     </div>
   );
 }
+
 
 function FinalCard({
   avg,
