@@ -2,38 +2,128 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { teamSeasons, type Player, type TeamSeason } from "@/lib/eredivisie-data";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import {
+  teamSeasons,
+  clubColors,
+  fallbackClubColor,
+  type Player,
+  type TeamSeason,
+  type FootballPosition,
+} from "@/lib/eredivisie-data";
 
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
       { title: "Eredivisie XI — Build Your Dream Squad" },
-      { name: "description", content: "Roll the dice, pick from random Eredivisie club-seasons, and build your ultimate 11." },
+      {
+        name: "description",
+        content:
+          "Roll the dice, pick from random Eredivisie club-seasons, and build your ultimate 4-3-3.",
+      },
     ],
   }),
   component: Game,
 });
 
-type Slot = { player: Player; club: string; season: string };
+// 4-3-3 formation slot definitions
+type SlotKey =
+  | "GK"
+  | "LB"
+  | "CB1"
+  | "CB2"
+  | "RB"
+  | "CM1"
+  | "CM2"
+  | "CAM"
+  | "LW"
+  | "ST"
+  | "RW";
 
-const FORMATION = { GK: 1, DEF: 4, MID: 4, FWD: 2 } as const;
+interface SlotDef {
+  key: SlotKey;
+  label: string; // shown on pitch
+  accepts: FootballPosition; // which position fills this slot
+  top: string;
+  left: string;
+}
+
+const FORMATION_SLOTS: SlotDef[] = [
+  { key: "GK", label: "GK", accepts: "GK", top: "90%", left: "50%" },
+  { key: "LB", label: "LB", accepts: "LB", top: "72%", left: "12%" },
+  { key: "CB1", label: "CB", accepts: "CB", top: "74%", left: "37%" },
+  { key: "CB2", label: "CB", accepts: "CB", top: "74%", left: "63%" },
+  { key: "RB", label: "RB", accepts: "RB", top: "72%", left: "88%" },
+  { key: "CM1", label: "CM", accepts: "CM", top: "50%", left: "28%" },
+  { key: "CM2", label: "CM", accepts: "CM", top: "50%", left: "72%" },
+  { key: "CAM", label: "CAM", accepts: "CAM", top: "38%", left: "50%" },
+  { key: "LW", label: "LW", accepts: "LW", top: "16%", left: "18%" },
+  { key: "ST", label: "ST", accepts: "ST", top: "12%", left: "50%" },
+  { key: "RW", label: "RW", accepts: "RW", top: "16%", left: "82%" },
+];
+
+interface PlacedPlayer {
+  player: Player;
+  club: string;
+  season: string;
+  slot: SlotKey;
+  positionPlayed: FootballPosition;
+}
 
 function Game() {
-  const [squad, setSquad] = useState<Slot[]>([]);
+  const [occupiedSlots, setOccupiedSlots] = useState<
+    Partial<Record<SlotKey, PlacedPlayer>>
+  >({});
+  const [selectedPlayerIds, setSelectedPlayerIds] = useState<Set<string>>(
+    new Set(),
+  );
   const [current, setCurrent] = useState<TeamSeason | null>(null);
   const [rolling, setRolling] = useState(false);
+  const [pickFor, setPickFor] = useState<Player | null>(null);
 
-  const need = useMemo(() => {
-    const counts = { GK: 0, DEF: 0, MID: 0, FWD: 0 };
-    squad.forEach((s) => counts[s.player.position]++);
-    return counts;
-  }, [squad]);
+  const placedCount = Object.keys(occupiedSlots).length;
+  const isFull = placedCount === 11;
 
-  const isFull = squad.length === 11;
+  const slotsByAccept = useMemo(() => {
+    const m: Partial<Record<FootballPosition, SlotDef[]>> = {};
+    for (const s of FORMATION_SLOTS) {
+      (m[s.accepts] ||= []).push(s);
+    }
+    return m;
+  }, []);
+
+  const findFreeSlotFor = (pos: FootballPosition): SlotKey | null => {
+    const slots = slotsByAccept[pos] || [];
+    for (const s of slots) if (!occupiedSlots[s.key]) return s.key;
+    return null;
+  };
+
+  const availablePositionsFor = (player: Player) => {
+    const uniq = Array.from(new Set(player.positions ?? []));
+    return uniq.map((pos) => ({
+      pos,
+      slot: findFreeSlotFor(pos),
+    }));
+  };
+
+  const teamHasAnyPlayable = (ts: TeamSeason) =>
+    ts.players.some(
+      (p) =>
+        !selectedPlayerIds.has(p.id) &&
+        (p.positions ?? []).some((pos) => findFreeSlotFor(pos) !== null),
+    );
 
   const roll = () => {
+    if (isFull) return;
     setRolling(true);
     setCurrent(null);
+    setPickFor(null);
     let ticks = 0;
     const interval = setInterval(() => {
       setCurrent(teamSeasons[Math.floor(Math.random() * teamSeasons.length)]);
@@ -45,25 +135,49 @@ function Game() {
     }, 80);
   };
 
-  const pickPlayer = (p: Player) => {
-    if (!current || isFull) return;
-    if (need[p.position] >= FORMATION[p.position]) return;
-    setSquad((s) => [...s, { player: p, club: current.club, season: current.season }]);
+  const openPicker = (player: Player) => {
+    if (selectedPlayerIds.has(player.id)) return;
+    const opts = availablePositionsFor(player);
+    if (!opts.some((o) => o.slot)) return; // no available positions
+    setPickFor(player);
+  };
+
+  const confirmPick = (player: Player, pos: FootballPosition) => {
+    const slot = findFreeSlotFor(pos);
+    if (!slot || !current) return;
+    setOccupiedSlots((prev) => ({
+      ...prev,
+      [slot]: {
+        player,
+        club: current.club,
+        season: current.season,
+        slot,
+        positionPlayed: pos,
+      },
+    }));
+    setSelectedPlayerIds((prev) => {
+      const n = new Set(prev);
+      n.add(player.id);
+      return n;
+    });
+    setPickFor(null);
     setCurrent(null);
   };
 
   const reset = () => {
-    setSquad([]);
+    setOccupiedSlots({});
+    setSelectedPlayerIds(new Set());
     setCurrent(null);
+    setPickFor(null);
   };
 
+  const placed = Object.values(occupiedSlots) as PlacedPlayer[];
   const avg =
-    squad.length > 0
-      ? squad.reduce((a, b) => a + b.player.rating, 0) / squad.length
+    placed.length > 0
+      ? placed.reduce((a, b) => a + b.player.rating, 0) / placed.length
       : 0;
 
-  const slotAvailable = (pos: Player["position"]) =>
-    need[pos] < FORMATION[pos];
+  const currentHasPlayable = current ? teamHasAnyPlayable(current) : false;
 
   return (
     <div className="min-h-screen">
@@ -75,14 +189,16 @@ function Game() {
             </div>
             <div>
               <h1 className="text-xl font-black tracking-tight">Eredivisie XI</h1>
-              <p className="text-xs text-muted-foreground">Roll. Pick. Build your dream squad.</p>
+              <p className="text-xs text-muted-foreground">
+                Roll. Pick. Build your 4-3-3.
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-4 text-sm">
             <div className="text-muted-foreground">
-              Squad <span className="font-bold text-foreground">{squad.length}/11</span>
+              Squad <span className="font-bold text-foreground">{placedCount}/11</span>
             </div>
-            {squad.length > 0 && (
+            {placedCount > 0 && (
               <button
                 onClick={reset}
                 className="text-xs text-muted-foreground hover:text-destructive transition-colors"
@@ -95,13 +211,11 @@ function Game() {
       </header>
 
       <main className="mx-auto grid max-w-6xl gap-6 px-6 py-8 lg:grid-cols-[1fr_420px]">
-        {/* Pitch */}
         <section>
-          <Pitch squad={squad} />
-          {isFull && <FinalCard avg={avg} squad={squad} onReset={reset} />}
+          <Pitch occupied={occupiedSlots} />
+          {isFull && <FinalCard avg={avg} placed={placed} onReset={reset} />}
         </section>
 
-        {/* Side panel */}
         <aside className="space-y-4">
           {!isFull && (
             <Card className="p-5">
@@ -109,7 +223,7 @@ function Game() {
                 <h2 className="text-sm font-bold uppercase tracking-wider text-muted-foreground">
                   Next pick
                 </h2>
-                <NeedBadge need={need} />
+                <SlotProgress occupied={occupiedSlots} />
               </div>
 
               {!current && (
@@ -127,47 +241,85 @@ function Game() {
               {current && (
                 <div>
                   <div
-                    className={`rounded-lg bg-gradient-to-br from-primary/20 to-accent/10 border border-primary/30 p-4 mb-4 text-center ${
+                    className={`rounded-lg border p-4 mb-4 text-center ${
                       rolling ? "animate-pulse" : ""
                     }`}
+                    style={{
+                      background: `linear-gradient(135deg, ${
+                        (clubColors[current.club] ?? fallbackClubColor).primary
+                      }33, transparent)`,
+                      borderColor: `${
+                        (clubColors[current.club] ?? fallbackClubColor).primary
+                      }80`,
+                    }}
                   >
                     <div className="text-xs uppercase tracking-wider text-muted-foreground">
                       {rolling ? "Rolling..." : "Selected"}
                     </div>
                     <div className="text-2xl font-black mt-1">{current.club}</div>
-                    <div className="text-sm text-primary font-semibold">{current.season}</div>
+                    <div className="text-sm font-semibold">{current.season}</div>
                   </div>
 
                   {!rolling && (
                     <>
-                      <p className="text-xs text-muted-foreground mb-2">
-                        Pick one player for your{" "}
-                        <span className="text-foreground font-semibold">
-                          {nextNeededPositions(need).join(" / ") || "squad"}
-                        </span>
-                        :
-                      </p>
-                      <div className="space-y-1.5 max-h-[420px] overflow-y-auto pr-1">
-                        {current.players.map((p) => {
-                          const disabled = !slotAvailable(p.position);
-                          return (
-                            <button
-                              key={p.name}
-                              onClick={() => pickPlayer(p)}
-                              disabled={disabled}
-                              className="w-full flex items-center justify-between gap-3 rounded-md border border-border bg-secondary/40 px-3 py-2 text-left hover:bg-primary/15 hover:border-primary/50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-secondary/40 disabled:hover:border-border"
-                            >
-                              <div className="flex items-center gap-3 min-w-0">
-                                <PositionPill pos={p.position} />
-                                <span className="font-medium truncate">{p.name}</span>
-                              </div>
-                              <span className="text-sm font-bold tabular-nums text-accent">
-                                {p.rating}
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
+                      {!currentHasPlayable ? (
+                        <div className="text-center py-4">
+                          <p className="text-sm text-muted-foreground mb-3">
+                            No valid players available from this team. Roll again.
+                          </p>
+                          <Button onClick={roll} className="w-full font-bold">
+                            Roll Again
+                          </Button>
+                        </div>
+                      ) : (
+                        <>
+                          <p className="text-xs text-muted-foreground mb-2">
+                            Pick a player. You'll choose a position next.
+                          </p>
+                          <div className="space-y-1.5 max-h-[420px] overflow-y-auto pr-1">
+                            {current.players.map((p) => {
+                              const taken = selectedPlayerIds.has(p.id);
+                              const opts = availablePositionsFor(p);
+                              const anyAvailable = opts.some((o) => o.slot);
+                              const disabled = taken || !anyAvailable;
+                              return (
+                                <button
+                                  key={p.id}
+                                  onClick={() => openPicker(p)}
+                                  disabled={disabled}
+                                  className="w-full flex items-center justify-between gap-3 rounded-md border border-border bg-secondary/40 px-3 py-2 text-left hover:bg-primary/15 hover:border-primary/50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-secondary/40 disabled:hover:border-border"
+                                >
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <div className="flex gap-0.5">
+                                      {p.positions.map((pos, i) => (
+                                        <PositionPill key={i} pos={pos} />
+                                      ))}
+                                    </div>
+                                    <span className="font-medium truncate ml-1">
+                                      {p.name}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    {taken && (
+                                      <span className="text-[10px] uppercase font-bold text-muted-foreground">
+                                        Picked
+                                      </span>
+                                    )}
+                                    {!taken && !anyAvailable && (
+                                      <span className="text-[10px] uppercase font-bold text-muted-foreground">
+                                        No slot
+                                      </span>
+                                    )}
+                                    <span className="text-sm font-bold tabular-nums text-accent">
+                                      {p.rating}
+                                    </span>
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </>
+                      )}
                     </>
                   )}
                 </div>
@@ -179,17 +331,17 @@ function Game() {
             <h2 className="text-sm font-bold uppercase tracking-wider text-muted-foreground mb-3">
               Your squad
             </h2>
-            {squad.length === 0 ? (
+            {placed.length === 0 ? (
               <p className="text-sm text-muted-foreground">No players yet.</p>
             ) : (
               <ul className="space-y-1.5">
-                {squad.map((s, i) => (
+                {placed.map((s) => (
                   <li
-                    key={i}
+                    key={s.slot}
                     className="flex items-center justify-between gap-2 text-sm"
                   >
                     <div className="flex items-center gap-2 min-w-0">
-                      <PositionPill pos={s.player.position} />
+                      <PositionPill pos={s.positionPlayed} />
                       <span className="font-medium truncate">{s.player.name}</span>
                     </div>
                     <span className="text-xs text-muted-foreground truncate">
@@ -202,134 +354,221 @@ function Game() {
           </Card>
         </aside>
       </main>
+
+      <PositionPickerDialog
+        player={pickFor}
+        onClose={() => setPickFor(null)}
+        onConfirm={confirmPick}
+        findFreeSlotFor={findFreeSlotFor}
+      />
     </div>
   );
 }
 
-function nextNeededPositions(need: Record<Player["position"], number>) {
-  const list: string[] = [];
-  (Object.keys(FORMATION) as Player["position"][]).forEach((p) => {
-    if (need[p] < FORMATION[p]) list.push(p);
-  });
-  return list;
+function PositionPickerDialog({
+  player,
+  onClose,
+  onConfirm,
+  findFreeSlotFor,
+}: {
+  player: Player | null;
+  onClose: () => void;
+  onConfirm: (p: Player, pos: FootballPosition) => void;
+  findFreeSlotFor: (pos: FootballPosition) => SlotKey | null;
+}) {
+  return (
+    <Dialog open={!!player} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>
+            Choose position for {player?.name}
+          </DialogTitle>
+          <DialogDescription>
+            Only available formation slots are enabled.
+          </DialogDescription>
+        </DialogHeader>
+        {player && (
+          <div className="grid grid-cols-3 gap-2 pt-2">
+            {Array.from(new Set(player.positions)).map((pos) => {
+              const free = findFreeSlotFor(pos);
+              return (
+                <button
+                  key={pos}
+                  disabled={!free}
+                  onClick={() => onConfirm(player, pos)}
+                  className="rounded-md border border-border bg-secondary/40 py-3 font-bold text-sm hover:bg-primary/20 hover:border-primary transition-colors disabled:opacity-30 disabled:line-through disabled:cursor-not-allowed"
+                >
+                  {pos}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
 }
 
-function NeedBadge({ need }: { need: Record<Player["position"], number> }) {
+function SlotProgress({
+  occupied,
+}: {
+  occupied: Partial<Record<SlotKey, PlacedPlayer>>;
+}) {
+  const groups: { label: string; keys: SlotKey[] }[] = [
+    { label: "GK", keys: ["GK"] },
+    { label: "DEF", keys: ["LB", "CB1", "CB2", "RB"] },
+    { label: "MID", keys: ["CM1", "CM2", "CAM"] },
+    { label: "ATT", keys: ["LW", "ST", "RW"] },
+  ];
   return (
     <div className="flex gap-1 text-[10px] font-bold">
-      {(Object.keys(FORMATION) as Player["position"][]).map((p) => (
-        <span
-          key={p}
-          className={`px-1.5 py-0.5 rounded ${
-            need[p] >= FORMATION[p]
-              ? "bg-primary/20 text-primary"
-              : "bg-secondary text-muted-foreground"
-          }`}
-        >
-          {p} {need[p]}/{FORMATION[p]}
-        </span>
-      ))}
+      {groups.map((g) => {
+        const filled = g.keys.filter((k) => occupied[k]).length;
+        const full = filled === g.keys.length;
+        return (
+          <span
+            key={g.label}
+            className={`px-1.5 py-0.5 rounded ${
+              full
+                ? "bg-primary/20 text-primary"
+                : "bg-secondary text-muted-foreground"
+            }`}
+          >
+            {g.label} {filled}/{g.keys.length}
+          </span>
+        );
+      })}
     </div>
   );
 }
 
-function PositionPill({ pos }: { pos: Player["position"] }) {
-  const colors: Record<Player["position"], string> = {
+function PositionPill({ pos }: { pos: FootballPosition }) {
+  const colors: Record<string, string> = {
     GK: "bg-accent/80 text-accent-foreground",
-    DEF: "bg-blue-500/80 text-white",
-    MID: "bg-primary/80 text-primary-foreground",
-    FWD: "bg-destructive/80 text-destructive-foreground",
+    LB: "bg-blue-500/80 text-white",
+    CB: "bg-blue-500/80 text-white",
+    RB: "bg-blue-500/80 text-white",
+    CDM: "bg-primary/80 text-primary-foreground",
+    CM: "bg-primary/80 text-primary-foreground",
+    CAM: "bg-primary/80 text-primary-foreground",
+    LW: "bg-destructive/80 text-destructive-foreground",
+    RW: "bg-destructive/80 text-destructive-foreground",
+    ST: "bg-destructive/80 text-destructive-foreground",
   };
   return (
     <span
-      className={`inline-flex items-center justify-center w-9 text-[10px] font-black rounded px-1 py-0.5 ${colors[pos]}`}
+      className={`inline-flex items-center justify-center min-w-9 text-[10px] font-black rounded px-1 py-0.5 ${
+        colors[pos] ?? "bg-secondary"
+      }`}
     >
       {pos}
     </span>
   );
 }
 
-function Pitch({ squad }: { squad: Slot[] }) {
-  const byPos = {
-    GK: squad.filter((s) => s.player.position === "GK"),
-    DEF: squad.filter((s) => s.player.position === "DEF"),
-    MID: squad.filter((s) => s.player.position === "MID"),
-    FWD: squad.filter((s) => s.player.position === "FWD"),
-  };
-
-  const rows: { pos: Player["position"]; slots: number; top: string }[] = [
-    { pos: "GK", slots: 1, top: "88%" },
-    { pos: "DEF", slots: 4, top: "68%" },
-    { pos: "MID", slots: 4, top: "42%" },
-    { pos: "FWD", slots: 2, top: "16%" },
-  ];
-
+function Pitch({
+  occupied,
+}: {
+  occupied: Partial<Record<SlotKey, PlacedPlayer>>;
+}) {
   return (
     <div className="relative aspect-[3/4] w-full max-w-2xl mx-auto rounded-2xl overflow-hidden pitch-bg shadow-2xl ring-1 ring-border">
-      {/* pitch markings */}
-      <div className="absolute inset-3 border-2 rounded-md pointer-events-none" style={{ borderColor: "var(--pitch-line)" }} />
+      <div
+        className="absolute inset-3 border-2 rounded-md pointer-events-none"
+        style={{ borderColor: "var(--pitch-line)" }}
+      />
       <div
         className="absolute left-1/2 top-1/2 w-24 h-24 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 pointer-events-none"
         style={{ borderColor: "var(--pitch-line)" }}
       />
-      <div className="absolute left-1/2 top-1/2 w-2 h-2 -translate-x-1/2 -translate-y-1/2 rounded-full" style={{ backgroundColor: "var(--pitch-line)" }} />
+      <div
+        className="absolute left-1/2 top-1/2 w-2 h-2 -translate-x-1/2 -translate-y-1/2 rounded-full"
+        style={{ backgroundColor: "var(--pitch-line)" }}
+      />
       <div
         className="absolute left-1/2 top-3 w-px h-[calc(100%-1.5rem)] -translate-x-1/2 pointer-events-none"
         style={{ backgroundColor: "var(--pitch-line)" }}
       />
-      {/* penalty boxes */}
-      <div className="absolute left-1/2 top-3 w-1/2 h-20 -translate-x-1/2 border-2 border-t-0 pointer-events-none" style={{ borderColor: "var(--pitch-line)" }} />
-      <div className="absolute left-1/2 bottom-3 w-1/2 h-20 -translate-x-1/2 border-2 border-b-0 pointer-events-none" style={{ borderColor: "var(--pitch-line)" }} />
+      <div
+        className="absolute left-1/2 top-3 w-1/2 h-20 -translate-x-1/2 border-2 border-t-0 pointer-events-none"
+        style={{ borderColor: "var(--pitch-line)" }}
+      />
+      <div
+        className="absolute left-1/2 bottom-3 w-1/2 h-20 -translate-x-1/2 border-2 border-b-0 pointer-events-none"
+        style={{ borderColor: "var(--pitch-line)" }}
+      />
 
-      {rows.map((row) =>
-        Array.from({ length: row.slots }).map((_, i) => {
-          const left = ((i + 1) / (row.slots + 1)) * 100;
-          const slot = byPos[row.pos][i];
-          return (
+      {FORMATION_SLOTS.map((slot) => {
+        const placed = occupied[slot.key];
+        const colors = placed
+          ? clubColors[placed.club] ?? fallbackClubColor
+          : null;
+        return (
+          <div
+            key={slot.key}
+            className="absolute -translate-x-1/2 -translate-y-1/2 flex flex-col items-center gap-1"
+            style={{ left: slot.left, top: slot.top }}
+          >
             <div
-              key={`${row.pos}-${i}`}
-              className="absolute -translate-x-1/2 -translate-y-1/2 flex flex-col items-center gap-1"
-              style={{ left: `${left}%`, top: row.top }}
+              className="w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center text-sm font-black shadow-lg ring-2"
+              style={
+                placed && colors
+                  ? {
+                      backgroundColor: colors.primary,
+                      color: colors.secondary,
+                      borderColor: colors.secondary,
+                      boxShadow: `0 0 0 2px ${colors.secondary}`,
+                    }
+                  : {
+                      backgroundColor: "rgba(0,0,0,0.35)",
+                      color: "rgba(255,255,255,0.55)",
+                      boxShadow: "0 0 0 2px rgba(255,255,255,0.3)",
+                    }
+              }
             >
-              <div
-                className={`w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center text-sm font-black shadow-lg ring-2 ${
-                  slot
-                    ? "bg-card ring-primary text-foreground"
-                    : "bg-background/40 ring-white/30 text-white/40 border-dashed"
-                }`}
-              >
-                {slot ? slot.player.rating : row.pos}
-              </div>
-              {slot && (
-                <div className="text-center">
-                  <div className="text-[11px] font-bold leading-tight bg-background/80 px-1.5 py-0.5 rounded text-foreground whitespace-nowrap">
-                    {slot.player.name.split(" ").slice(-1)[0]}
-                  </div>
-                  <div className="text-[9px] text-white/80 mt-0.5">
-                    {slot.club}
-                  </div>
-                </div>
-              )}
+              {placed ? placed.player.rating : slot.label}
             </div>
-          );
-        })
-      )}
+            {placed ? (
+              <div className="text-center">
+                <div className="text-[11px] font-bold leading-tight bg-background/80 px-1.5 py-0.5 rounded text-foreground whitespace-nowrap">
+                  {placed.player.name.split(" ").slice(-1)[0]}
+                </div>
+                <div className="text-[9px] text-white/80 mt-0.5">
+                  {placed.club}
+                </div>
+              </div>
+            ) : (
+              <div className="text-[10px] font-bold text-white/70 bg-black/40 px-1.5 py-0.5 rounded">
+                {slot.label}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
 
 function FinalCard({
   avg,
-  squad,
+  placed,
   onReset,
 }: {
   avg: number;
-  squad: Slot[];
+  placed: PlacedPlayer[];
   onReset: () => void;
 }) {
   const tier =
-    avg >= 83 ? "World Class" : avg >= 80 ? "Elite" : avg >= 77 ? "Strong" : avg >= 74 ? "Solid" : "Underdogs";
-  const clubs = new Set(squad.map((s) => s.club)).size;
+    avg >= 83
+      ? "World Class"
+      : avg >= 80
+        ? "Elite"
+        : avg >= 77
+          ? "Strong"
+          : avg >= 74
+            ? "Solid"
+            : "Underdogs";
+  const clubs = new Set(placed.map((s) => s.club)).size;
   return (
     <Card className="mt-6 p-6 bg-gradient-to-br from-primary/15 via-card to-accent/10 border-primary/40">
       <div className="text-center">
